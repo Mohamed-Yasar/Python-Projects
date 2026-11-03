@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THE VOID</title>
+    <style>
+        :root {
+            --bg-color: #000000;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            overflow: hidden;
+            height: 100vh;
+            user-select: none;
+            cursor: none;
+        }
+
+        #void-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* UI removed in V11, but keeping cleanup just in case */
+        h1,
+        p {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="void-canvas"></canvas>
+    <script>
+        /**
+         * SYSTEM KERNEL V12 - WARP DRIVE (CONSOLIDATED)
+         * @impress-level: MAX
+         */
+
+        const CONFIG = {
+            particleCount: 3500,
+            attractionRange: 900,
+            attractionForce: 0.15,
+            orbitForce: 0.08,
+            friction: 0.96,
+            trailStrength: 0.25, // FIX: Increased from 0.10 to prevent "Gray Paint" bug
+            colorSpeed: 0.8,
+            warpSpeedC: 15       // Speed multiplier during warp
+        };
+
+        const RAW_QUOTES = [
+            "Wake up", "Dream deeper", "Colors breathe", "Float on",
+            "Is this real?", "Let go", "Soft chaos", "Fade in",
+            "Mind expands", "Time loops", "See sounds", "Touch light",
+            "Drift forever", "Just vibes", "No walls", "Be infinite",
+            "Kaleidoscope", "Neon pulse", "Soft landing", "Up is down",
+            "Sky melts", "Forms shift", "Beyond logic", "Pure feeling",
+            "Close eyes", "Open mind", "Lucid now", "Fly high"
+        ];
+
+        const STATE = {
+            ctx: null,
+            canvas: null,
+            width: 0,
+            height: 0,
+            particles: [],
+            textParticles: [],
+            mouse: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+            audioContext: null,
+            globalHue: 0,
+            quoteBag: [],
+            interacted: false,
+            warping: false,  // Warp State
+            warpFactor: 0    // 0 to 1
+        };
+
+        // --- AUDIO ENGINEER V4 ---
+        const AudioEngine = {
+            nodes: [],
+            warpOsc: null,
+
+            init: function () {
+                if (STATE.audioContext) return;
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    STATE.audioContext = new AudioContext();
+                    [130.81, 164.81, 196.00, 246.94, 261.63, 392.00].forEach(f => this.createPad(f));
+                    this.createWarpDrive();
+                } catch (e) { console.error(e); }
+            },
+
+            createPad: function (freq) {
+                const osc = STATE.audioContext.createOscillator();
+                const gain = STATE.audioContext.createGain();
+                const pan = STATE.audioContext.createStereoPanner();
+                osc.frequency.value = freq;
+                const lfo = STATE.audioContext.createOscillator();
+                lfo.frequency.value = 0.2;
+                const lfoGain = STATE.audioContext.createGain();
+                lfoGain.gain.value = 5;
+                lfo.connect(lfoGain); lfoGain.connect(osc.frequency); lfo.start();
+
+                gain.gain.value = 0;
+                pan.pan.value = (Math.random() - 0.5) * 0.9;
+                osc.type = 'sine';
+                osc.connect(gain); gain.connect(pan); pan.connect(STATE.audioContext.destination);
+                osc.start();
+                gain.gain.linearRampToValueAtTime(0.05, STATE.audioContext.currentTime + 3);
+                this.nodes.push({ osc, gain });
+            },
+
+            createWarpDrive: function () {
+                const bufferSize = STATE.audioContext.sampleRate * 2;
+                const buffer = STATE.audioContext.createBuffer(1, bufferSize, STATE.audioContext.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+                const noise = STATE.audioContext.createBufferSource();
+                noise.buffer = buffer;
+                noise.loop = true;
+
+                const filter = STATE.audioContext.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.value = 100; // Start minimal
+
+                const gain = STATE.audioContext.createGain();
+                gain.gain.value = 0;
+
+                noise.connect(filter); filter.connect(gain); gain.connect(STATE.audioContext.destination);
+                noise.start();
+
+                this.warpOsc = { filter, gain };
+            },
+
+            setWarp: function (active) {
+                if (!this.warpOsc) return;
+                const time = STATE.audioContext.currentTime;
+                if (active) {
+                    this.warpOsc.gain.gain.setTargetAtTime(0.1, time, 0.5);
+                    this.warpOsc.filter.frequency.setTargetAtTime(8000, time, 1);
+                } else {
+                    this.warpOsc.gain.gain.setTargetAtTime(0, time, 0.2);
+                    this.warpOsc.filter.frequency.setTargetAtTime(100, time, 0.5);
+                }
+            },
+
+            pulse: function () {
+                if (!STATE.audioContext) this.init();
+                const osc = STATE.audioContext.createOscillator();
+                const gain = STATE.audioContext.createGain();
+                osc.frequency.value = 1000 + Math.random() * 500;
+                osc.type = 'sine';
+                osc.connect(gain); gain.connect(STATE.audioContext.destination);
+                gain.gain.setValueAtTime(0, STATE.audioContext.currentTime);
+                gain.gain.linearRampToValueAtTime(0.04, STATE.audioContext.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, STATE.audioContext.currentTime + 1.5);
+                osc.start(); osc.stop(STATE.audioContext.currentTime + 1.6);
+            }
+        };
+
+        // --- PHYSICS ENGINE ---
+        class Particle {
+            constructor(isTitle = false, x, y) {
+                if (isTitle) {
+                    this.x = x; this.y = y; this.vx = 0; this.vy = 0;
+                    this.isStatic = true; this.size = 2;
+                } else {
+                    this.reset();
+                }
+                this.hueOffset = Math.random() * 360;
+            }
+
+            reset() {
+                this.x = Math.random() * STATE.width;
+                this.y = Math.random() * STATE.height;
+                this.vx = 0; this.vy = 0;
+                this.size = Math.random() * 2 + 0.5;
+                this.isStatic = false;
+                this.hueOffset = Math.random() * 360;
+            }
+
+            update() {
+                if (this.isStatic) {
+                    if (STATE.interacted) {
+                        this.isStatic = false;
+                        this.vx = (Math.random() - 0.5) * 10;
+                        this.vy = (Math.random() - 0.5) * 10;
+                    } else {
+                        this.x += (Math.random() - 0.5) * 0.5;
+                        this.y += (Math.random() - 0.5) * 0.5;
+                        return;
+                    }
+                }
+
+                const dx = STATE.mouse.x - this.x;
+                const dy = STATE.mouse.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                let orbit = CONFIG.orbitForce;
+                let attract = CONFIG.attractionForce;
+                let fric = CONFIG.friction;
+
+                if (STATE.warpFactor > 0.01) {
+                    fric = 0.96 + (0.03 * STATE.warpFactor);
+                    attract = CONFIG.attractionForce * (1 + STATE.warpFactor * 5);
+                    orbit = CONFIG.orbitForce * (1 + STATE.warpFactor * 2);
+                }
+
+                if (dist > 10) {
+                    const force = attract / (dist * (0.05 - STATE.warpFactor * 0.04) + 1);
+                    this.vx += (dx / dist) * force;
+                    this.vy += (dy / dist) * force;
+                    this.vx += -(dy / dist) * orbit;
+                    this.vy += (dx / dist) * orbit;
+                }
+
+                this.vx *= fric; this.vy *= fric;
+                this.x += this.vx; this.y += this.vy;
+
+                if (this.x < 0) { this.x = 0; this.vx *= -0.8; }
+                if (this.x > STATE.width) { this.x = STATE.width; this.vx *= -0.8; }
+                if (this.y < 0) { this.y = 0; this.vy *= -0.8; }
+                if (this.y > STATE.height) { this.y = STATE.height; this.vy *= -0.8; }
+            }
+
+            draw(ctx) {
+                let hue = (STATE.globalHue + this.hueOffset) % 360;
+                let brightness = this.isStatic ? 80 : 50;
+                let size = this.size;
+
+                if (STATE.warpFactor > 0.01) {
+                    hue = (200 + Math.random() * 60);
+                    brightness = 80 + Math.random() * 20;
+                    const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+
+                    ctx.strokeStyle = `hsla(${hue}, 100%, ${brightness}%, ${0.8})`;
+                    ctx.lineWidth = size * (1 - STATE.warpFactor * 0.5);
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(this.x - this.vx * STATE.warpFactor * 2, this.y - this.vy * STATE.warpFactor * 2);
+                    ctx.stroke();
+                    return;
+                }
+
+                ctx.fillStyle = `hsla(${hue}, 100%, ${brightness}%, 0.8)`;
+                ctx.beginPath(); ctx.arc(this.x, this.y, size, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+
+        class TextParticle {
+            constructor(x, y, text) {
+                this.text = text;
+                this.originX = x;
+                this.originY = y;
+                this.z = 0;
+                this.rotation = Math.random() * 0.2 - 0.1;
+                this.hue = Math.random() * 360;
+            }
+            update() {
+                this.z += 10 + (STATE.warpFactor * 50);
+                this.rotation += 0.01 + (STATE.warpFactor * 0.1);
+            }
+            draw(ctx) {
+                const fov = 400;
+                const scale = fov / (fov + this.z);
+                if (scale < 0.01) return;
+                ctx.save();
+                ctx.translate(this.originX, this.originY);
+                ctx.scale(scale, scale);
+                ctx.rotate(this.rotation);
+                ctx.fillStyle = "#FFF";
+                ctx.font = "bold 30px Courier New";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.globalAlpha = scale;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = `hsl(${this.hue}, 100%, 50%)`;
+                ctx.fillText(this.text, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        function getQuote() {
+            if (STATE.quoteBag.length === 0) {
+                STATE.quoteBag = [...RAW_QUOTES];
+                for (let i = STATE.quoteBag.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [STATE.quoteBag[i], STATE.quoteBag[j]] = [STATE.quoteBag[j], STATE.quoteBag[i]];
+                }
+            }
+            return STATE.quoteBag.pop();
+        }
+
+        function init() {
+            STATE.canvas = document.getElementById('void-canvas');
+            STATE.ctx = STATE.canvas.getContext('2d');
+            resize();
+            window.addEventListener('resize', resize);
+
+            createTitleParticles();
+            const remaining = CONFIG.particleCount - STATE.particles.length;
+            for (let i = 0; i < remaining; i++) STATE.particles.push(new Particle());
+
+            document.addEventListener('mousemove', e => {
+                STATE.mouse.x = e.clientX;
+                STATE.mouse.y = e.clientY;
+            });
+
+            document.addEventListener('mousedown', (e) => {
+                STATE.warping = true;
+                AudioEngine.setWarp(true);
+            });
+
+            document.addEventListener('mouseup', (e) => {
+                STATE.warping = false;
+                AudioEngine.setWarp(false);
+
+                if (!STATE.interacted) {
+                    STATE.interacted = true;
+                    AudioEngine.init();
+                } else {
+                    AudioEngine.pulse();
+                    spawnText(e.clientX, e.clientY);
+                }
+            });
+
+            requestAnimationFrame(loop);
+        }
+
+        function createTitleParticles() {
+            const tCan = document.createElement('canvas');
+            const tCtx = tCan.getContext('2d');
+            tCan.width = STATE.width; tCan.height = STATE.height;
+            tCtx.fillStyle = '#FFF'; tCtx.font = 'bold 150px Arial';
+            tCtx.textAlign = 'center'; tCtx.textBaseline = 'middle';
+            tCtx.fillText("THE VOID", STATE.width / 2, STATE.height / 2);
+            const idata = tCtx.getImageData(0, 0, STATE.width, STATE.height);
+            const data = idata.data;
+            const step = 6;
+            for (let y = 0; y < STATE.height; y += step) {
+                for (let x = 0; x < STATE.width; x += step) {
+                    if (data[(y * STATE.width + x) * 4 + 3] > 128) STATE.particles.push(new Particle(true, x, y));
+                }
+            }
+        }
+
+        function spawnText(x, y) {
+            const text = getQuote();
+            STATE.textParticles.push(new TextParticle(x, y, text));
+        }
+
+        function resize() {
+            STATE.width = window.innerWidth;
+            STATE.height = window.innerHeight;
+            STATE.canvas.width = STATE.width;
+            STATE.canvas.height = STATE.height;
+        }
+
+        function drawSingularity() {
+            const ctx = STATE.ctx;
+            const x = STATE.mouse.x;
+            const y = STATE.mouse.y;
+            ctx.shadowBlur = 20; ctx.shadowColor = "white"; ctx.fillStyle = "#fff";
+            ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+            const time = Date.now() * 0.005;
+            const radius = 20 + Math.sin(time * 2) * 2;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = `hsl(${(STATE.globalHue + 180) % 360}, 100%, 50%)`;
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(x, y, radius, time, time + Math.PI * 1.5); ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+
+        function loop() {
+            if (STATE.warping) {
+                if (STATE.warpFactor < 1) STATE.warpFactor += 0.05;
+            } else {
+                if (STATE.warpFactor > 0) STATE.warpFactor -= 0.05;
+            }
+
+            STATE.ctx.fillStyle = `rgba(0, 0, 0, ${CONFIG.trailStrength})`;
+            STATE.ctx.fillRect(0, 0, STATE.width, STATE.height);
+            STATE.globalHue += CONFIG.colorSpeed;
+
+            STATE.particles.forEach(p => { p.update(); p.draw(STATE.ctx); });
+
+            STATE.textParticles = STATE.textParticles.filter(tp => tp.z < 2000);
+            STATE.textParticles.forEach(tp => { tp.update(); tp.draw(STATE.ctx); });
+
+            drawSingularity();
+            requestAnimationFrame(loop);
+        }
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+
+</html>

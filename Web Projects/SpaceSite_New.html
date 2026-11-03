@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THE VOID V16</title>
+    <style>
+        :root {
+            --bg-color: #000000;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            overflow: hidden;
+            height: 100vh;
+            user-select: none;
+            cursor: none;
+        }
+
+        #void-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="void-canvas"></canvas>
+    <script>
+        /**
+         * SYSTEM KERNEL V16 - PURE CHAOS
+         * @status: UNSTRUCTURED
+         */
+
+        const CONFIG = {
+            particleCount: 2000,
+            attractionRange: 900,
+            attractionForce: 0.15,
+            orbitForce: 0.08,
+            friction: 0.96,
+            trailStrength: 0.22,
+            colorSpeed: 1.2,
+            warpSpeedC: 15
+        };
+
+        const DREAM_ARTIFACTS = [
+            "🍕", "👽", "🍄", "👁️", "🌌", "🧬", "💎", "🧿",
+            "🦄", "🌵", "🔮", "🌈", "💊", "🛸", "🗿", "👾",
+            "⚡", "🌀", "💠", "🪐", "🧊", "🕯️", "🧬", "🧠"
+        ];
+
+        const STATE = {
+            ctx: null, canvas: null,
+            width: 0, height: 0,
+            particles: [],
+            artifacts: [],
+            mouse: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+            audioContext: null,
+            globalHue: 0,
+            artifactBag: [],
+            interacted: false,
+            warping: false,
+            warpFactor: 0
+        };
+
+        // --- AUDIO ENGINEER V4 ---
+        const AudioEngine = {
+            nodes: [], warpOsc: null,
+            init: function () {
+                if (STATE.audioContext) return;
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    STATE.audioContext = new AudioContext();
+                    [130.81, 164.81, 196.00, 246.94, 261.63, 392.00].forEach(f => this.createPad(f));
+                    this.createWarpDrive();
+                } catch (e) { console.error(e); }
+            },
+            createPad: function (freq) {
+                const osc = STATE.audioContext.createOscillator();
+                const gain = STATE.audioContext.createGain();
+                const pan = STATE.audioContext.createStereoPanner();
+                osc.frequency.value = freq;
+                const lfo = STATE.audioContext.createOscillator();
+                lfo.frequency.value = 0.2;
+                const lfoGain = STATE.audioContext.createGain();
+                lfoGain.gain.value = 5;
+                lfo.connect(lfoGain); lfoGain.connect(osc.frequency); lfo.start();
+                gain.gain.value = 0; pan.pan.value = (Math.random() - 0.5) * 0.9;
+                osc.type = 'sine'; osc.connect(gain); gain.connect(pan); pan.connect(STATE.audioContext.destination);
+                osc.start();
+                gain.gain.linearRampToValueAtTime(0.05, STATE.audioContext.currentTime + 3);
+                this.nodes.push({ osc, gain });
+            },
+            createWarpDrive: function () {
+                const bufferSize = STATE.audioContext.sampleRate * 2;
+                const buffer = STATE.audioContext.createBuffer(1, bufferSize, STATE.audioContext.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+                const noise = STATE.audioContext.createBufferSource();
+                noise.buffer = buffer; noise.loop = true;
+                const filter = STATE.audioContext.createBiquadFilter();
+                filter.type = 'lowpass'; filter.frequency.value = 100;
+                const gain = STATE.audioContext.createGain();
+                gain.gain.value = 0;
+                noise.connect(filter); filter.connect(gain); gain.connect(STATE.audioContext.destination);
+                noise.start();
+                this.warpOsc = { filter, gain };
+            },
+            setWarp: function (active) {
+                if (!this.warpOsc) return;
+                const time = STATE.audioContext.currentTime;
+                if (active) {
+                    this.warpOsc.gain.gain.setTargetAtTime(0.1, time, 0.5);
+                    this.warpOsc.filter.frequency.setTargetAtTime(8000, time, 1);
+                } else {
+                    this.warpOsc.gain.gain.setTargetAtTime(0, time, 0.2);
+                    this.warpOsc.filter.frequency.setTargetAtTime(100, time, 0.5);
+                }
+            },
+            pulse: function () {
+                if (!STATE.audioContext) this.init();
+                const osc = STATE.audioContext.createOscillator();
+                const gain = STATE.audioContext.createGain();
+                osc.frequency.value = 800 + Math.random() * 800;
+                osc.type = 'sine';
+                osc.connect(gain); gain.connect(STATE.audioContext.destination);
+                gain.gain.setValueAtTime(0, STATE.audioContext.currentTime);
+                gain.gain.linearRampToValueAtTime(0.05, STATE.audioContext.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, STATE.audioContext.currentTime + 1.5);
+                osc.start(); osc.stop(STATE.audioContext.currentTime + 1.6);
+            }
+        };
+
+        // --- PHYSICS ENGINE ---
+        class Particle {
+            constructor(isTitle = false, x, y) {
+                this.hueOffset = Math.random() * 360;
+                if (isTitle) {
+                    this.x = x; // ABSOLUTE
+                    this.y = y;
+                    this.vx = 0; this.vy = 0;
+                    this.isStatic = true; this.size = 2;
+                } else {
+                    this.reset();
+                }
+            }
+
+            reset() {
+                this.x = Math.random() * STATE.width;
+                this.y = Math.random() * STATE.height;
+                this.vx = 0; this.vy = 0;
+                this.size = Math.random() * 2 + 0.5;
+                this.isStatic = false;
+            }
+
+            update() {
+                if (this.isStatic) {
+                    if (STATE.interacted) {
+                        this.isStatic = false;
+                        this.vx = (Math.random() - 0.5) * 15;
+                        this.vy = (Math.random() - 0.5) * 15;
+                    } else { return; }
+                }
+
+                const dx = STATE.mouse.x - this.x;
+                const dy = STATE.mouse.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                let orbit = CONFIG.orbitForce;
+                let attract = CONFIG.attractionForce;
+                let fric = CONFIG.friction;
+
+                if (STATE.warpFactor > 0.01) {
+                    fric = 0.96 + (0.03 * STATE.warpFactor);
+                    attract = CONFIG.attractionForce * (1 + STATE.warpFactor * 5);
+                    orbit = CONFIG.orbitForce * (1 + STATE.warpFactor * 2);
+                }
+
+                if (dist > 10) {
+                    const force = attract / (dist * (0.05 - STATE.warpFactor * 0.04) + 1);
+                    this.vx += (dx / dist) * force;
+                    this.vy += (dy / dist) * force;
+                    this.vx += -(dy / dist) * orbit;
+                    this.vy += (dx / dist) * orbit;
+                }
+
+                this.vx *= fric; this.vy *= fric;
+                this.x += this.vx; this.y += this.vy;
+
+                if (this.x < 0) { this.x = 0; this.vx *= -0.8; }
+                if (this.x > STATE.width) { this.x = STATE.width; this.vx *= -0.8; }
+                if (this.y < 0) { this.y = 0; this.vy *= -0.8; }
+                if (this.y > STATE.height) { this.y = STATE.height; this.vy *= -0.8; }
+            }
+
+            draw(ctx) {
+                let hue = (STATE.globalHue + this.hueOffset) % 360;
+                let brightness = this.isStatic ? 90 : 60;
+
+                if (STATE.warpFactor > 0.01) {
+                    hue = (200 + Math.random() * 60);
+                    brightness = 80 + Math.random() * 20;
+                    ctx.strokeStyle = `hsla(${hue}, 100%, ${brightness}%, 0.8)`;
+                    ctx.lineWidth = this.size * (1 - STATE.warpFactor * 0.5);
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(this.x - this.vx * STATE.warpFactor * 3, this.y - this.vy * STATE.warpFactor * 3);
+                    ctx.stroke();
+                    return;
+                }
+
+                ctx.fillStyle = `hsla(${hue}, 100%, ${brightness}%, 0.8)`;
+                ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+
+        class DreamArtifact {
+            constructor(x, y, char, random = false) {
+                this.char = char;
+                this.originX = x;
+                this.originY = y;
+                this.z = 0;
+                this.rotation = Math.random() * 0.5 - 0.25;
+            }
+            update() {
+                this.z += 10 + (STATE.warpFactor * 60);
+                this.rotation += 0.02 + (STATE.warpFactor * 0.1);
+            }
+            draw(ctx) {
+                const fov = 400;
+                const scale = fov / (fov + this.z);
+                if (scale < 0.01) return;
+                ctx.save();
+                ctx.translate(this.originX, this.originY);
+                ctx.scale(scale, scale);
+                ctx.rotate(this.rotation);
+                ctx.fillStyle = "#FFF";
+                ctx.font = "40px Arial";
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.globalAlpha = scale;
+                ctx.fillText(this.char, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        function getArtifact() {
+            if (STATE.artifactBag.length === 0) {
+                STATE.artifactBag = [...DREAM_ARTIFACTS];
+                for (let i = STATE.artifactBag.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [STATE.artifactBag[i], STATE.artifactBag[j]] = [STATE.artifactBag[j], STATE.artifactBag[i]];
+                }
+            }
+            return STATE.artifactBag.pop();
+        }
+
+        function init() {
+            STATE.canvas = document.getElementById('void-canvas');
+            STATE.ctx = STATE.canvas.getContext('2d');
+            resize();
+            window.addEventListener('resize', resize);
+
+            createTitleParticles();
+
+            const remaining = CONFIG.particleCount - STATE.particles.length;
+            for (let i = 0; i < remaining; i++) STATE.particles.push(new Particle());
+
+            document.addEventListener('mousemove', e => {
+                STATE.mouse.x = e.clientX;
+                STATE.mouse.y = e.clientY;
+            });
+            document.addEventListener('mousedown', (e) => {
+                STATE.warping = true; AudioEngine.setWarp(true);
+            });
+            document.addEventListener('mouseup', (e) => {
+                STATE.warping = false; AudioEngine.setWarp(false);
+                if (!STATE.interacted) {
+                    STATE.interacted = true; AudioEngine.init();
+                } else {
+                    AudioEngine.pulse(); spawnArtifact(e.clientX, e.clientY);
+                }
+            });
+            requestAnimationFrame(loop);
+        }
+
+        function createTitleParticles() {
+            const tCan = document.createElement('canvas');
+            const tCtx = tCan.getContext('2d');
+            tCan.width = STATE.width; tCan.height = STATE.height;
+            tCtx.fillStyle = '#FFF'; tCtx.font = 'bold 150px Arial';
+            tCtx.textAlign = 'center'; tCtx.textBaseline = 'middle';
+            tCtx.fillText("THE VOID", STATE.width / 2, STATE.height / 2);
+            const idata = tCtx.getImageData(0, 0, STATE.width, STATE.height);
+            const data = idata.data;
+            const step = 8;
+            for (let y = 0; y < STATE.height; y += step) {
+                for (let x = 0; x < STATE.width; x += step) {
+                    if (data[(y * STATE.width + x) * 4 + 3] > 128) STATE.particles.push(new Particle(true, x, y));
+                }
+            }
+        }
+
+        function spawnArtifact(x, y) {
+            const char = getArtifact();
+            STATE.artifacts.push(new DreamArtifact(x, y, char));
+        }
+
+        function spawnBurst() {
+            // Pick a random center for the burst
+            const cx = Math.random() * STATE.width;
+            const cy = Math.random() * STATE.height;
+            // Spawn 3-5 artifacts nearby
+            const count = 3 + Math.floor(Math.random() * 3);
+            for (let i = 0; i < count; i++) {
+                const char = getArtifact();
+                const ox = cx + (Math.random() - 0.5) * 200;
+                const oy = cy + (Math.random() - 0.5) * 200;
+                STATE.artifacts.push(new DreamArtifact(ox, oy, char, true));
+            }
+        }
+
+        function resize() {
+            STATE.width = window.innerWidth;
+            STATE.height = window.innerHeight;
+            STATE.canvas.width = STATE.width;
+            STATE.canvas.height = STATE.height;
+        }
+
+        function drawSingularity() {
+            const ctx = STATE.ctx;
+            const mx = STATE.mouse.x;
+            const my = STATE.mouse.y;
+
+            ctx.shadowBlur = 20; ctx.shadowColor = "white"; ctx.fillStyle = "#fff";
+            ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI * 2); ctx.fill();
+
+            const time = Date.now() * 0.005;
+            const radius = 20 + Math.sin(time * 2) * 2;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = `hsl(${(STATE.globalHue + 180) % 360}, 100%, 50%)`;
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(mx, my, radius, time, time + Math.PI * 1.5); ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+
+        function loop() {
+            if (STATE.warping) { if (STATE.warpFactor < 1) STATE.warpFactor += 0.05; }
+            else { if (STATE.warpFactor > 0) STATE.warpFactor -= 0.05; }
+
+            STATE.ctx.fillStyle = `rgba(0, 0, 0, ${CONFIG.trailStrength})`;
+            STATE.ctx.fillRect(0, 0, STATE.width, STATE.height);
+            STATE.globalHue += CONFIG.colorSpeed;
+
+            STATE.particles.forEach(p => { p.update(); p.draw(STATE.ctx); });
+
+            STATE.artifacts = STATE.artifacts.filter(a => a.z < 2000);
+            STATE.artifacts.forEach(a => { a.update(); a.draw(STATE.ctx); });
+
+            // Random Burst Logic (Low chance, High impact)
+            if (STATE.interacted && Math.random() < 0.005) { // 0.5% chance per frame (~1 burst every 3-4s)
+                spawnBurst();
+            }
+
+            drawSingularity();
+
+            requestAnimationFrame(loop);
+        }
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+
+</html>
